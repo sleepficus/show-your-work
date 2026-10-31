@@ -19,29 +19,41 @@ one against the evidence:
 > beeps at claims with nothing behind them; it does not certify the
 > ones that beep clean.
 
-It is the mechanism layer of the verification discipline described in
-*Did the Agent Do the Work?* (Misfit Circuit, 2026) — deterministic
+Read the practical guide: [Did the agent actually do the work?](https://www.misfitcircuit.com/labs/show-your-work/).
+
+This tool implements a small part of that verification approach — deterministic
 checks only. No AI judge, no network, no dependencies: Python 3.10+
 standard library, one small package.
 
 ## Run it
 
-No install needed. From this folder:
+Requires Python 3.10 or newer; Git is used below to download the code. No Python packages need installing.
+
+```sh
+git clone https://github.com/sleepficus/show-your-work.git
+cd show-your-work
+python3 -m showyourwork check examples/report.md --evidence examples/evidence
+```
+
+The example deliberately returns exit code 1 because it contains contradictions.
+For your own report, from the repository folder:
 
 ```
 python3 -m showyourwork check REPORT.md --evidence ./the-work
 ```
 
-Or install the launcher anywhere on your PATH (see BUILD-REPORT):
+For structured output, add `--json`:
 
-```
-showyourwork check REPORT.md --evidence ./the-work
-showyourwork check REPORT.md --evidence ./the-work --json
+```sh
+python3 -m showyourwork check REPORT.md --evidence ./the-work --json
 ```
 
-Exit codes, so an agent (or a CI step) can gate on the result alone:
-**0** = no contradictions · **1** = contradictions found · **2** =
-usage/input error.
+Keep the report outside the evidence folder and point the command at only the
+files relevant to that report.
+
+Exit codes: **0** = no contradictions found · **1** = contradictions found ·
+**2** = usage/input error. Zero does not mean every claim was verified; inspect
+unverifiable results and remember that unextracted claims are not listed.
 
 ## Try the example
 
@@ -87,8 +99,9 @@ the report it just wrote and the folder it just produced, *before* it
 tells the human the work is done. The JSON card has a stable shape —
 `summary` counts, a `claims` list (`kind`, `claim`, `verdict`,
 `reason`), the evidence file count, the run's limits, and the doctrine
-string. A CONTRADICTED row is a bug in the report or in the work; the
-agent's job is to fix one of them, not to argue with the checker.
+string. A CONTRADICTED row needs investigation: the report, the work, the evidence
+scope, or the checker itself could be wrong. Inspect the cited evidence before
+changing anything. Preserve a reproducible case if the checker is mistaken.
 
 ## What it checks
 
@@ -119,9 +132,16 @@ agent's job is to fix one of them, not to argue with the checker.
   UNVERIFIABLE is the tool declining to guess — treat it as an
   invitation to hand over better evidence.
 
-## Provenance
+## Tests and current status
 
-Built by the Misfit Circuit crew under the operator's Law 2: spec →
-build → test → install → self-review → independent certification.
-Status and findings live in BUILD-REPORT.md; the certification verdict
-travels with the release, whatever it says.
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+The [v0.1 audit](AUDIT-v0.1.md) found issues, including false contradictions.
+The [v0.1.1 fix report](FIX-REPORT-v0.1.1.md) records fixes and builder testing,
+but explicitly leaves independent review of those fixes pending. This README
+does not certify the checker.
+
+Built by Stephen Luc and the Misfit Circuit crew. The [Lab](https://www.misfitcircuit.com/labs/)
+has related experiments and their limits.
