@@ -110,7 +110,7 @@ changing anything. Preserve a reproducible case if the checker is mistaken.
 | A file was created | The evidence tree (path, suffix, or basename) |
 | A SHA-256 hash | Recomputed SHA-256 of every evidence file; also file↔hash pairs stated in the report |
 | "N files" | The actual evidence file count |
-| "N tests / checks" | Test totals in evidence text (`Ran N tests`, `N passed`, `N/M`) |
+| "N tests / checks" | Test-shaped totals in evidence (`Ran N tests`, `N tests passed`, pytest summary forms, `N/M`) |
 | A clean pass | Failure markers in the evidence (unittest FAILED, Traceback, pytest failure summaries) |
 | Bare numbers, percentages | Presence in the evidence text (weak support; absence is UNVERIFIABLE, never a contradiction) |
 
