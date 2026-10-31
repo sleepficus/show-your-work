@@ -1,0 +1,1 @@
+honest note: original app was built locally with no GitHub history; this history is a reconstruction in build order estimating how an AI builder recreating it today would commit it.
