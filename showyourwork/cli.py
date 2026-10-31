@@ -26,8 +26,8 @@ def main(argv=None):
         if not os.path.isfile(args.report):
             print(f"error: report not found: {args.report}", file=sys.stderr)
             return 2
-        if not os.path.exists(args.evidence):
-            print(f"error: evidence not found: {args.evidence}", file=sys.stderr)
+        if not (os.path.isfile(args.evidence) or os.path.isdir(args.evidence)):
+            print(f"error: evidence must be a regular file or directory: {args.evidence}", file=sys.stderr)
             return 2
         try:
             result, exit_code = run_check(args.report, args.evidence)

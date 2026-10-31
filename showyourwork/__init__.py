@@ -5,4 +5,4 @@ supposedly produced, and grades each checkable claim SUPPORTED,
 CONTRADICTED, or UNVERIFIABLE. It checks receipt discipline, not truth.
 """
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"

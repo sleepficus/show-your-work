@@ -7,6 +7,7 @@ can be re-derived by re-running the same comparisons.
 import hashlib
 import os
 import re
+import stat
 from dataclasses import dataclass, field
 
 DOCTRINE = (
@@ -38,20 +39,21 @@ RE_NUMBER = re.compile(r"\b" + NUM + r"(?:\.\d+){0,3}\b")
 RE_SUCCESS = re.compile(
     r"\b(all\s+)?(tests?|checks?|suites?)\s+(pass|passed|passing)\b"
     r"|\beverything\s+(passed|passes)\b|\bclean\s+pass\b"
-    r"|\b0\s+(failures?|failed|errors?)\b|\bno\s+failures?\b",
+    r"|\b0\s+(failures?|failed|errors?)\b|\bno\s+failures?\b"
+    r"|\b(?:no|0)\s+(?:tests?|checks?|suites?)\s+failed\b",
     re.IGNORECASE)
 # A report ADMITTING failure, in any ordinary phrasing, must never be
 # graded as asserting a clean pass (audit F1: "3 tests failed;
 # remaining tests passed" is a truthful report, not a success claim).
 ADMISSION_PATTERNS = [
-    re.compile(r"\b([1-9]\d*)\s+(?:tests?\s+|checks?\s+)?(failed|failures?|errors?)\b",
+    re.compile(r"\b([1-9]\d*)\s+(?:(?:tests?|checks?|suites?)\s+)?(failed|failures?|errors?)\b",
                re.IGNORECASE),
-    re.compile(r"\b(tests?|checks?)\s+(failed|failing)\b", re.IGNORECASE),
+    re.compile(r"\b(tests?|checks?|suites?)\s+(failed|failing)\b", re.IGNORECASE),
     re.compile(r"\b(failures?|errors?|failed)\s*[:=]\s*([1-9]\d*)", re.IGNORECASE),
     re.compile(r"\b([1-9]\d*)\s+of\s+\d+\s+(failed|did not pass)\b", re.IGNORECASE),
     re.compile(r"\bnot all\b[^.\n]{0,40}\b(pass|passed)\b", re.IGNORECASE),
     re.compile(r"\bdid not pass\b", re.IGNORECASE),
-    re.compile(r"\bfailing\s+(tests?|checks?)\b", re.IGNORECASE),
+    re.compile(r"\bfailing\s+(tests?|checks?|suites?)\b", re.IGNORECASE),
 ]
 RE_MARK_FAIL_STRONG = [
     re.compile(r"FAILED\s*\(failures=\d+\)"),
@@ -59,8 +61,9 @@ RE_MARK_FAIL_STRONG = [
     re.compile(r"(\d+)\s+failed,\s*\d+\s+passed"),
     re.compile(r"=+\s*(\d+)\s+failed\b"),
     re.compile(r"(?m)^FAILED\s+\S+"),            # pytest short summary
-    re.compile(r"(?m)^ERROR\s+\S+::\S+"),        # pytest error summary
+    re.compile(r"(?m)^ERROR\s+\S+"),        # pytest error summary
     re.compile(r"(?m)^ERROR:\s+\S+"),            # unittest error header
+    re.compile(r"(?m)^=+[^\n]*\b[1-9]\d*\s+errors?\b"),
 ]
 RE_MARK_PASS = [
     re.compile(r"Ran\s+\d+\s+tests?[\s\S]{0,60}?\bOK\b"),
@@ -137,6 +140,8 @@ class Evidence:
 
 
 def load_evidence(path):
+    if not (os.path.isfile(path) or os.path.isdir(path)):
+        raise OSError("evidence must be a regular file or directory")
     ev = Evidence(root=str(path))
     paths = []
     if os.path.isfile(path):
@@ -157,7 +162,13 @@ def load_evidence(path):
             h256 = hashlib.sha256()
             h1 = hashlib.sha1()
             size = 0
-            with open(ap, "rb") as fh:
+            # Nonblocking open plus fstat prevents a special file (including
+            # a FIFO reached through a symlink) from hanging the reader.
+            fd = os.open(ap, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            with os.fdopen(fd, "rb") as fh:
+                if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                    ev.files_skipped += 1
+                    continue
                 while True:
                     chunk = fh.read(65536)
                     if not chunk:
@@ -167,7 +178,11 @@ def load_evidence(path):
                     h1.update(chunk)
             text = ""
             if size <= MAX_TEXT_BYTES:
-                with open(ap, "rb") as fh:
+                fd = os.open(ap, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+                with os.fdopen(fd, "rb") as fh:
+                    if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                        ev.files_skipped += 1
+                        continue
                     raw = fh.read()
                 if b"\x00" not in raw:
                     text = raw.decode("utf-8", errors="replace")
@@ -181,6 +196,62 @@ def load_evidence(path):
         except OSError:
             ev.files_skipped += 1
     return ev
+
+
+def _test_counts(text):
+    """Extract distinct total/pass/failure counts from recognized runner shapes.
+
+    A pytest pass subtotal isn't a total when failures/skips also appear.
+    Unknown formats and unrelated fractions supply no test-count basis.
+    """
+    out = {k: set() for k in ("total", "passed", "failed", "errors", "skipped")}
+    totals = [_int_value(m.group(1)) for m in re.finditer(
+        r"\bRan\s+(" + NUM + r")\s+tests?\b", text, re.IGNORECASE)]
+    out["total"].update(totals)
+    failures = [_int_value(m.group(1)) for m in re.finditer(
+        r"\bfailures?=(" + NUM + r")\b", text)]
+    errors = [_int_value(m.group(1)) for m in re.finditer(
+        r"\berrors?=(" + NUM + r")\b", text)]
+    out["failed"].update(failures)
+    out["errors"].update(errors)
+    if totals and not any(p.search(text) for p in RE_MARK_FAIL_STRONG) and re.search(r"(?m)^OK\b", text):
+        out["passed"].update(totals)
+    for m in re.finditer(r"\b(" + NUM + r")\s+tests?\s*[:,]?\s*(passed|pass|OK)\b", text, re.IGNORECASE):
+        if re.search(r"\d\s*/\s*$", text[:m.start()]):
+            continue  # denominator of an explicit test fraction, not passes
+        value = _int_value(m.group(1))
+        out["passed"].add(value)
+        # This shape describes passed tests only; with no failure markers it
+        # also supplies the total for backward-compatible simple summaries.
+        if not any(p.search(text) for p in RE_MARK_FAIL_STRONG):
+            out["total"].add(value)
+    for line in text.splitlines():
+        # Require a pytest-style duration trailer; equality-only framing is
+        # accepted too, but the full line must consist of runner outcomes.
+        raw = line.strip()
+        framed = raw.startswith("=") and raw.endswith("=")
+        body = raw.strip("= ")
+        has_duration = bool(re.search(r"\s+in\s+[\d.]+s$", body))
+        body = re.sub(r"\s+in\s+[\d.]+s$", "", body)
+        if not (framed or has_duration):
+            continue
+        if not re.fullmatch(r"(?:" + NUM + r"\s+(?:passed|failed|skipped|xfailed|xpassed|errors?|deselected|warnings?)(?:,\s*|$))+", body):
+            continue
+        statuses = {}
+        for match in re.finditer(r"(" + NUM + r")\s+(passed|failed|skipped|xfailed|xpassed|errors?|deselected|warnings?)\b", body):
+            key = "errors" if match.group(2) in ("error", "errors") else match.group(2)
+            statuses[key] = statuses.get(key, 0) + _int_value(match.group(1))
+        for key in out:
+            if key != "total" and key in statuses:
+                out[key].add(statuses[key])
+        total = sum(v for k, v in statuses.items() if k in ("passed", "failed", "skipped", "xfailed", "xpassed", "errors"))
+        if any(k in statuses for k in ("passed", "failed", "skipped", "xfailed", "xpassed", "errors")):
+            out["total"].add(total)
+    # Fractions only count when explicitly attached to tests/checks.
+    for m in re.finditer(r"\b(" + NUM + r")\s*/\s*(" + NUM + r")\s+(?:tests?|checks?)\b", text, re.IGNORECASE):
+        out["passed"].add(_int_value(m.group(1)))
+        out["total"].add(_int_value(m.group(2)))
+    return out
 
 
 @dataclass
@@ -201,8 +272,10 @@ def check_report(report_text, ev):
     # (prose like "- exporter.zip - the release, SHA-256: ab12..." counts).
     for line in report_text.splitlines():
         for hm in RE_SHA256.finditer(line):
-            window = line[max(0, hm.start() - 80):hm.start()]
-            tokens = list(RE_FILETOKEN.finditer(window))
+            # Match complete tokens before applying the proximity window;
+            # slicing first can turn the tail of a long name into a new file.
+            tokens = [t for t in RE_FILETOKEN.finditer(line, 0, hm.start())
+                      if hm.start() - t.end() <= 80]
             distinct = {t.group(1) for t in tokens}
             if len(distinct) != 1:
                 # Zero tokens: not a pair. Two or more: ambiguous -
@@ -286,6 +359,9 @@ def check_report(report_text, ev):
     hash_spans += [m.span() for m in RE_SHA1.finditer(report_text)]
     hash_spans += [m.span() for m in re.finditer(
         r"\bSHA-?256\b|\bSHA-?1\b|\bMD5\b", report_text, re.IGNORECASE)]
+    # Digits embedded in model/version identifiers are labels, not counts.
+    hash_spans += [m.span() for m in re.finditer(
+        r"\b[A-Za-z][\w.-]*[-_]\d+(?:\.\d+)+\b|\bv\d+(?:\.\d+)+\b", report_text)]
 
     def _in_hash(span):
         return any(s <= span[0] and span[1] <= e for s, e in hash_spans)
@@ -306,31 +382,33 @@ def check_report(report_text, ev):
                 claims.append(Claim("count", label, "CONTRADICTED",
                                     f"the evidence contains {actual} files"))
         elif noun.startswith(("test", "check")):
+            tail = report_text[m.end():]
+            status_match = re.match(r"\s*[:,]?\s*(passed|pass|failed|fail|skipped|errors?)\b",
+                                    tail, re.IGNORECASE)
+            status = status_match.group(1).lower() if status_match else "total"
+            if re.search(r"\d\s*/\s*$", report_text[:m.start()]):
+                status = "total"  # this match is the fraction's denominator
+            status = {"pass": "passed", "fail": "failed", "error": "errors"}.get(status, status)
             bases = set()
             for f in ev.files:
-                if not f.text:
-                    continue
-                # Bases must be anchored in test-shaped text (audit F3:
-                # a bare "500 passed" in prose - "500 passed the
-                # entrance exam" - is not a test total).
-                for pat in (r"Ran\s+(" + NUM + r")\s+tests?",
-                            r"(" + NUM + r")\s+tests?\s*[:,]?\s*(?:passed|pass|OK)\b",
-                            r"(" + NUM + r")\s*/\s*" + NUM,
-                            r"={1,}[^=\n]*?\b(" + NUM + r")\s+passed\b",
-                            r"\b(" + NUM + r")\s+passed\s+in\s+[\d.]+\s*s\b"):
-                    for mm in re.finditer(pat, f.text, re.IGNORECASE):
-                        bases.add(_int_value(mm.group(1)))
+                if f.text:
+                    bases.update(_test_counts(f.text)[status])
             if n in bases:
                 claims.append(Claim("count", label, "SUPPORTED",
-                                    "matches a test total in the evidence text"))
-            elif bases:
+                                    f"matches a test {status} count in the evidence text"))
+            elif len(bases) == 1:
                 claims.append(Claim("count", label, "CONTRADICTED",
-                                    f"test totals in the evidence are {sorted(bases)}"))
+                                    f"test {status} counts in the evidence are {sorted(bases)}"))
+            elif bases:
+                claims.append(Claim("count", label, "UNVERIFIABLE",
+                                    f"multiple test {status} counts in the evidence: {sorted(bases)}"))
             else:
                 claims.append(Claim("count", label, "UNVERIFIABLE",
-                                    "no test totals found in the evidence"))
+                                    f"no test {status} counts found in the evidence"))
         else:
             hit = ev.search_text(m.group(0))
+            if not hit:
+                hit = ev.search_text(f"{n} {m.group(2)}")
             if not hit and n >= 1000:
                 hit = ev.search_text(f"{n:,} {m.group(2)}")
             if hit:
@@ -341,8 +419,25 @@ def check_report(report_text, ev):
                                     f"no basis for this count in the evidence"))
 
     # --- 6. success claims vs failure markers ---------------------------
-    fail_admitted = any(p.search(report_text) for p in ADMISSION_PATTERNS)
-    if RE_SUCCESS.search(report_text) and not fail_admitted:
+    # "No tests failed" is a clean-pass assertion, not an admission.
+    admission_text = re.sub(r"\b(?:no|0)\s+(?:tests?|checks?|suites?)\s+failed\b",
+                            "", report_text, flags=re.IGNORECASE)
+    fail_admitted = any(p.search(admission_text) for p in ADMISSION_PATTERNS)
+    successes = []
+    for match in RE_SUCCESS.finditer(report_text):
+        prefix = report_text[max(0, match.start()-80):match.start()]
+        if re.search(r"\b(?:remaining|other|some|rest\s+of\s+the|subset\s+of\s+the)\s*$",
+                     prefix, re.IGNORECASE):
+            continue
+        # "5 tests passed" supplies a pass subtotal, not a claim that the
+        # entire run was clean. "All 5 tests passed" explicitly says more.
+        numeric_prefix = re.search(r"\b" + NUM + r"\s*$", prefix)
+        all_numeric_prefix = re.search(r"\ball(?:\s+of\s+the)?\s+" + NUM + r"\s*$",
+                                       prefix, re.IGNORECASE)
+        if numeric_prefix and not all_numeric_prefix:
+            continue
+        successes.append(match)
+    if successes and not fail_admitted:
         marker = None
         for f in ev.files:
             if not f.text:
@@ -417,7 +512,11 @@ def run_check(report_path, evidence_path):
     for f in ev.files:
         f_abs = os.path.abspath(os.path.join(ev.root, f.rel)) \
             if not os.path.isfile(ev.root) else os.path.abspath(ev.root)
-        if f_abs == report_abs:
+        try:
+            is_report = os.path.samefile(f_abs, report_abs)
+        except OSError:
+            is_report = f_abs == report_abs
+        if is_report:
             excluded_report = True
             continue
         kept.append(f)

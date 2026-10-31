@@ -110,7 +110,7 @@ changing anything. Preserve a reproducible case if the checker is mistaken.
 | A file was created | The evidence tree (path, suffix, or basename) |
 | A SHA-256 hash | Recomputed SHA-256 of every evidence file; also file↔hash pairs stated in the report |
 | "N files" | The actual evidence file count |
-| "N tests / checks" | Test-shaped totals in evidence (`Ran N tests`, `N tests passed`, pytest summary forms, `N/M`) |
+| "N tests / checks" | Test-shaped totals in evidence (`Ran N tests`, `N tests passed`, pytest summary forms, explicit `N/M tests`) |
 | A clean pass | Failure markers in the evidence (unittest FAILED, Traceback, pytest failure summaries) |
 | Bare numbers, percentages | Presence in the evidence text (weak support; absence is UNVERIFIABLE, never a contradiction) |
 
@@ -138,10 +138,12 @@ changing anything. Preserve a reproducible case if the checker is mistaken.
 python3 -m unittest discover -s tests -v
 ```
 
-The [v0.1 audit](AUDIT-v0.1.md) found issues, including false contradictions.
-The [v0.1.1 fix report](FIX-REPORT-v0.1.1.md) records fixes and builder testing,
-but explicitly leaves independent review of those fixes pending. This README
-does not certify the checker.
+Version **0.1.2** has completed a bounded independent follow-up: 42 unit tests,
+31 original core cases, 10 CLI cases and seven additional boundaries passed.
+See [the exact review and limits](REVIEW-v0.1.2.md). Earlier findings remain in
+the [v0.1 audit](AUDIT-v0.1.md) and [v0.1.1 fix report](FIX-REPORT-v0.1.1.md).
+This supports small assisted trials, not universal certification. No external
+participant trials are claimed.
 
 Built by Stephen Luc and the Misfit Circuit crew. The [Lab](https://www.misfitcircuit.com/labs/)
 has related experiments and their limits.
