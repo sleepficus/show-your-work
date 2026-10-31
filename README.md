@@ -145,3 +145,9 @@ does not certify the checker.
 
 Built by Stephen Luc and the Misfit Circuit crew. The [Lab](https://www.misfitcircuit.com/labs/)
 has related experiments and their limits.
+
+## License
+
+[MIT](LICENSE). You may use, modify, and share this project, including commercially,
+while keeping the copyright and license notice. Third-party dependencies and any
+separately attributed material retain their own terms.
